@@ -1,10 +1,8 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.0.31903.59
+# Visual Studio Version 18
+VisualStudioVersion = 18.1.11312.151
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ImageTransformer.Console", "src\ImageTransformer.Console\ImageTransformer.Console.csproj", "{90C3ED7C-A6DA-4286-8625-A60EF8E10917}"
 EndProject
 Global
@@ -33,7 +31,7 @@ Global
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
-	GlobalSection(NestedProjects) = preSolution
-		{90C3ED7C-A6DA-4286-8625-A60EF8E10917} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {D75C19AE-5979-42D6-BA51-61B299A977A0}
 	EndGlobalSection
 EndGlobal

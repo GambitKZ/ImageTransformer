@@ -41,6 +41,7 @@ The ImageTransformer is a console application designed to process all images fro
 ## Configuration
 
 The application uses appsettings.json for configuration. Key settings include:
+
 - Input folder path
 - Output folder path
 - Size threshold for PNG conversion
@@ -52,18 +53,21 @@ Sensitive settings can be stored in UserSecrets.
 ## Architecture
 
 ### Folder Structure
+
 - ImageTransformer/: Root project folder containing the .NET console application code.
 - Input/: Directory for source images.
 - Output/: Directory for processed images.
 - .spec-workflow/: Contains specification and documentation files.
 
 ### Core Components
+
 - **Console Application**: Orchestrates the workflow.
 - **Input Folder**: Source images.
 - **Output Folder**: Processed images.
 - **Configuration System**: appsettings.json and UserSecrets.
 
 ### Data Flow
+
 1. Load configuration.
 2. Prompt user to start.
 3. Scan input folder.

@@ -1,39 +1,138 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using ImageTransformer.Console.Interfaces;
+using ImageTransformer.Console.Services;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Spectre.Console;
 
-IConfiguration configuration = new ConfigurationBuilder()
+HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
+
+// Configure configuration
+builder.Configuration
     .SetBasePath(Directory.GetCurrentDirectory())
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-    .AddUserSecrets<Program>()
-    .Build();
+    .AddUserSecrets<Program>();
 
-// To manage UserSecrets:
-// - Set a secret: dotnet user-secrets set "Key" "Value"
-// - List secrets: dotnet user-secrets list
-// - Clear secrets: dotnet user-secrets clear
+// Register services
+builder.Services.AddScoped<IImageScanner, ImageScanner>();
+builder.Services.AddScoped<IImageProcessor, ImageProcessor>();
 
-// Example usage: var inputFolder = configuration["InputFolder"];
-Console.WriteLine("Configuration loaded successfully.");
+using IHost host = builder.Build();
 
-// Load list of image files from input folder
+// Get services
+var configuration = host.Services.GetRequiredService<IConfiguration>();
+var imageScanner = host.Services.GetRequiredService<IImageScanner>();
+var imageProcessor = host.Services.GetRequiredService<IImageProcessor>();
+
+// Display welcome message
+AnsiConsole.MarkupLine("[green]ImageTransformer Console Application[/]");
+AnsiConsole.MarkupLine("[dim]Configuration loaded successfully.[/]");
+
+// Validate input folder
 var inputFolderPath = Path.Combine(Directory.GetCurrentDirectory(), configuration["InputFolder"] ?? "Input");
+
 if (!Directory.Exists(inputFolderPath))
 {
-    throw new DirectoryNotFoundException($"Input folder '{inputFolderPath}' does not exist.");
+    AnsiConsole.MarkupLine($"[red]Input folder not found: {Markup.Escape(inputFolderPath)}[/]");
+    AnsiConsole.MarkupLine("[dim]Please ensure the input folder exists and try again.[/]");
+    return;
 }
-var imageFiles = Directory.GetFiles(inputFolderPath)
-    .Where(f => Path.GetExtension(f).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg")
-    .ToList();
+
+// Check if folder is accessible
+try
+{
+    // Attempt to enumerate files to verify read access
+    _ = Directory.EnumerateFileSystemEntries(inputFolderPath).FirstOrDefault();
+}
+catch (UnauthorizedAccessException)
+{
+    AnsiConsole.MarkupLine($"[red]Input folder is not accessible: {Markup.Escape(inputFolderPath)}[/]");
+    AnsiConsole.MarkupLine("[dim]Please check folder permissions and try again.[/]");
+    return;
+}
+catch (Exception ex)
+{
+    AnsiConsole.MarkupLine($"[red]Error accessing input folder: {Markup.Escape(ex.Message)}[/]");
+    return;
+}
+
+AnsiConsole.WriteLine();
+
+// Prompt user to start processing
+if (!AnsiConsole.Confirm("Do you want to start processing images?"))
+{
+    AnsiConsole.MarkupLine("[yellow]Processing cancelled by user.[/]");
+    return;
+}
+
+// Get input folder path from configuration
+// var inputFolderPath = Path.Combine(Directory.GetCurrentDirectory(), configuration["InputFolder"] ?? "Input");
+
+// Scan for images
+AnsiConsole.MarkupLine($"[blue]Scanning input folder: {Markup.Escape(inputFolderPath)}[/]");
+IEnumerable<string> imageFiles;
+
+try
+{
+    imageFiles = await imageScanner.ScanAsync(inputFolderPath);
+}
+catch (Exception ex)
+{
+    AnsiConsole.MarkupLine($"[red]Error scanning input folder: {Markup.Escape(ex.Message)}[/]");
+    return;
+}
+
+// Display results
+var imageCount = imageFiles.Count();
+if (imageCount == 0)
+{
+    AnsiConsole.MarkupLine("[yellow]No image files found in the input folder.[/]");
+    AnsiConsole.MarkupLine("[dim]Supported formats: .png, .jpg, .jpeg[/]");
+    return;
+}
+
+AnsiConsole.MarkupLine($"[green]Found {imageCount} image file{(imageCount == 1 ? "" : "s")} to process:[/]");
+
+foreach (var file in imageFiles)
+{
+    AnsiConsole.MarkupLine($"  [dim]• {Markup.Escape(Path.GetFileName(file))}[/]");
+}
+
+AnsiConsole.WriteLine();
+
+// Get output folder path from configuration
+var outputDirectory = Path.Combine(Directory.GetCurrentDirectory(), configuration["OutputFolder"] ?? "Output");
+Directory.CreateDirectory(outputDirectory);
 
 // Wrap processing loop with progress bar
 AnsiConsole.Progress()
     .Start(ctx =>
     {
-        var task = ctx.AddTask("Processing images", maxValue: imageFiles.Count);
+        var task = ctx.AddTask("Processing images", maxValue: imageCount);
         foreach (var file in imageFiles)
         {
             AnsiConsole.MarkupLine($"[blue]Processing {Markup.Escape(Path.GetFileName(file))}...[/]");
-            // TODO: Implement image processing logic here
+            try
+            {
+                string extension = Path.GetExtension(file).ToLowerInvariant();
+                if (extension == ".png")
+                {
+                    imageProcessor.ProcessPngImage(file, outputDirectory).Wait();
+                    AnsiConsole.MarkupLine($"[green]Converted {Markup.Escape(Path.GetFileName(file))} to JPEG.[/]");
+                }
+                else
+                {
+                    string destFile = Path.Combine(outputDirectory, Path.GetFileName(file));
+                    File.Copy(file, destFile, true);
+                    AnsiConsole.MarkupLine($"[green]Copied {Markup.Escape(Path.GetFileName(file))} as-is.[/]");
+                }
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]Error processing {Markup.Escape(Path.GetFileName(file))}: {Markup.Escape(ex.Message)}[/]");
+            }
             task.Increment(1);
         }
     });
+
+AnsiConsole.MarkupLine("[green]Processing completed![/]");
