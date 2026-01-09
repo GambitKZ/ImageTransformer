@@ -105,8 +105,8 @@ var outputDirectory = Path.Combine(Directory.GetCurrentDirectory(), configuratio
 Directory.CreateDirectory(outputDirectory);
 
 // Wrap processing loop with progress bar
-AnsiConsole.Progress()
-    .Start(ctx =>
+await AnsiConsole.Progress()
+    .StartAsync(async ctx =>
     {
         var task = ctx.AddTask("Processing images", maxValue: imageCount);
         foreach (var file in imageFiles)
@@ -115,16 +115,22 @@ AnsiConsole.Progress()
             try
             {
                 string extension = Path.GetExtension(file).ToLowerInvariant();
-                if (extension == ".png")
+                switch (extension)
                 {
-                    imageProcessor.ProcessPngImage(file, outputDirectory).Wait();
-                    AnsiConsole.MarkupLine($"[green]Converted {Markup.Escape(Path.GetFileName(file))} to JPEG.[/]");
-                }
-                else
-                {
-                    string destFile = Path.Combine(outputDirectory, Path.GetFileName(file));
-                    File.Copy(file, destFile, true);
-                    AnsiConsole.MarkupLine($"[green]Copied {Markup.Escape(Path.GetFileName(file))} as-is.[/]");
+                    case ".png":
+                        await imageProcessor.ProcessPngImage(file, outputDirectory);
+                        AnsiConsole.MarkupLine($"[green]Converted {Markup.Escape(Path.GetFileName(file))} to JPEG.[/]");
+                        break;
+                    case ".jpg":
+                    case ".jpeg":
+                        await imageProcessor.ProcessJpegImage(file, outputDirectory);
+                        AnsiConsole.MarkupLine($"[green]Processed JPEG {Markup.Escape(Path.GetFileName(file))}.[/]");
+                        break;
+                    default:
+                        string destFile = Path.Combine(outputDirectory, Path.GetFileName(file));
+                        File.Copy(file, destFile, true);
+                        AnsiConsole.MarkupLine($"[green]Copied {Markup.Escape(Path.GetFileName(file))} as-is.[/]");
+                        break;
                 }
             }
             catch (Exception ex)

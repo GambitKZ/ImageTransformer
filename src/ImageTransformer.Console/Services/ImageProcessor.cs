@@ -82,7 +82,105 @@ public class ImageProcessor : IImageProcessor
     /// <returns>A task representing the asynchronous operation.</returns>
     public async Task ProcessJpegImage(string inputFilePath, string outputDirectory)
     {
-        // TODO: Implement JPEG resizing logic
-        await Task.CompletedTask;
+        if (string.IsNullOrWhiteSpace(inputFilePath))
+        {
+            throw new ArgumentException("Input file path cannot be null or empty.", nameof(inputFilePath));
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            throw new ArgumentException("Output directory cannot be null or empty.", nameof(outputDirectory));
+        }
+
+        // Ensure output directory exists
+        Directory.CreateDirectory(outputDirectory);
+
+        // Get file size in MB
+        var fileInfo = new FileInfo(inputFilePath);
+        double sizeMB = fileInfo.Length / (1024.0 * 1024.0);
+
+        // Get configuration values with defaults
+        if (!double.TryParse(_configuration["JpegTargetSizeMB"], out double targetSizeMB))
+        {
+            targetSizeMB = 5.0; // Default target size
+        }
+
+        if (!double.TryParse(_configuration["ResizeStepPercentage"], out double resizeStepPercentage))
+        {
+            resizeStepPercentage = 3.0; // Default resize step
+        }
+
+        if (!int.TryParse(_configuration["MaxResizeIterations"], out int maxIterations))
+        {
+            maxIterations = 10; // Default max iterations
+        }
+
+        string outputFilePath = Path.Combine(outputDirectory, Path.GetFileName(inputFilePath));
+
+        if (sizeMB <= targetSizeMB)
+        {
+            // Copy as-is if already within target size
+            File.Copy(inputFilePath, outputFilePath, true);
+            return;
+        }
+
+        // Load the image using NetVips
+        using var image = Image.NewFromFile(inputFilePath);
+
+        // Iterative resizing loop
+        // Design choice: Resize iteratively to avoid over-compression in one step, allowing gradual size reduction.
+        // This approach balances quality and size, stopping when target is met or max iterations reached.
+        int iteration = 0;
+        double currentSizeMB = sizeMB;
+        Image currentImage = image;
+
+        while (currentSizeMB > targetSizeMB && iteration < maxIterations)
+        {
+            // Calculate scale factor (reduce dimensions by resizeStepPercentage)
+            double scaleFactor = 1.0 - (resizeStepPercentage / 100.0);
+
+            // Resize the image
+            currentImage = currentImage.Resize(scaleFactor);
+
+            // Save temporarily to check size (using a temp file to avoid overwriting output prematurely)
+            string tempFilePath = Path.Combine(outputDirectory, Guid.NewGuid().ToString() + ".jpg");
+            try
+            {
+                currentImage.Jpegsave(tempFilePath);
+
+                // Check the new size
+                var tempFileInfo = new FileInfo(tempFilePath);
+                currentSizeMB = tempFileInfo.Length / (1024.0 * 1024.0);
+
+                // If size is now acceptable or we've reached max iterations, move to final output
+                if (currentSizeMB <= targetSizeMB || iteration == maxIterations - 1)
+                {
+                    File.Move(tempFilePath, outputFilePath, true);
+                    break;
+                }
+                else
+                {
+                    // Clean up temp file and continue
+                    File.Delete(tempFilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Clean up temp file on error
+                if (File.Exists(tempFilePath))
+                {
+                    File.Delete(tempFilePath);
+                }
+                throw new InvalidOperationException("Error during JPEG resizing operation.", ex);
+            }
+
+            iteration++;
+        }
+
+        // If loop exited without saving, copy original (shouldn't happen, but safety net)
+        if (!File.Exists(outputFilePath))
+        {
+            File.Copy(inputFilePath, outputFilePath, true);
+        }
     }
 }

@@ -3,8 +3,8 @@
 | Task # | Title                                 | Status       |
 |--------|---------------------------------------|--------------|
 | 001    | Update IImageProcessor Interface      | completed   |
-| 002    | Implement ProcessJpegImage in ImageProcessor Class | not started  |
-| 003    | Update Processing Loop for JPEG Handling | not started  |
+| 002    | Implement ProcessJpegImage in ImageProcessor Class | completed  |
+| 003    | Update Processing Loop for JPEG Handling | completed  |
 
 ## Next Task for Implementation
-- Task 002: Implement ProcessJpegImage in ImageProcessor Class
+- All tasks completed for FR-005.
