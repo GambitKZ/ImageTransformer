@@ -65,9 +65,6 @@ if (!AnsiConsole.Confirm("Do you want to start processing images?"))
     return;
 }
 
-// Get input folder path from configuration
-// var inputFolderPath = Path.Combine(Directory.GetCurrentDirectory(), configuration["InputFolder"] ?? "Input");
-
 // Scan for images
 AnsiConsole.MarkupLine($"[blue]Scanning input folder: {Markup.Escape(inputFolderPath)}[/]");
 IEnumerable<string> imageFiles;
