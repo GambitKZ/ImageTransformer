@@ -1,8 +1,7 @@
-using ImageTransformer.Console.Interfaces;
+﻿using ImageTransformer.Console.Interfaces;
 using Microsoft.Extensions.Configuration;
 using NetVips;
-using System.IO;
-using System.Threading.Tasks;
+using Spectre.Console;
 
 namespace ImageTransformer.Console.Services;
 
@@ -14,6 +13,11 @@ public class ImageProcessor : IImageProcessor
 {
     private readonly IConfiguration _configuration;
 
+    private double _pngSizeThresholdMB;
+    private double _jpegTargetSizeMB;
+    private double _resizeStepPercentage;
+    private int _maxResizeIterations;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ImageProcessor"/> class.
     /// </summary>
@@ -21,6 +25,26 @@ public class ImageProcessor : IImageProcessor
     public ImageProcessor(IConfiguration configuration)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+
+        if (!double.TryParse(_configuration["PngSizeThresholdMB"], out _pngSizeThresholdMB))
+        {
+            _pngSizeThresholdMB = 5.0;
+        }
+
+        if (!double.TryParse(_configuration["JpegTargetSizeMB"], out _jpegTargetSizeMB))
+        {
+            _jpegTargetSizeMB = 5.0;
+        }
+
+        if (!double.TryParse(_configuration["ResizeStepPercentage"], out _resizeStepPercentage))
+        {
+            _resizeStepPercentage = 3.0; // Default resize step
+        }
+
+        if (!int.TryParse(_configuration["MaxResizeIterations"], out _maxResizeIterations))
+        {
+            _maxResizeIterations = 10; // Default max iterations
+        }
     }
 
     /// <summary>
@@ -33,45 +57,34 @@ public class ImageProcessor : IImageProcessor
     /// <returns>A task representing the asynchronous operation.</returns>
     public async Task ProcessPngImage(string inputFilePath, string outputDirectory)
     {
-        if (string.IsNullOrWhiteSpace(inputFilePath))
-        {
-            throw new ArgumentException("Input file path cannot be null or empty.", nameof(inputFilePath));
-        }
-
-        if (string.IsNullOrWhiteSpace(outputDirectory))
-        {
-            throw new ArgumentException("Output directory cannot be null or empty.", nameof(outputDirectory));
-        }
+        ValidateFolders(inputFilePath, outputDirectory);
 
         // Ensure output directory exists
         Directory.CreateDirectory(outputDirectory);
 
-        // Get file size in MB
-        var fileInfo = new FileInfo(inputFilePath);
-        double sizeMB = fileInfo.Length / (1024.0 * 1024.0);
+        var sizeMB = GetFileSizeInMB(inputFilePath);
 
-        // Get threshold from configuration, with default fallback
-        if (!double.TryParse(_configuration["PngSizeThresholdMB"], out double thresholdMB))
+        if (sizeMB < _pngSizeThresholdMB)
         {
-            thresholdMB = 5.0; // Default threshold
+            CopyAsIs(inputFilePath, outputDirectory);
+            return;
         }
 
-        string outputFilePath;
-        if (sizeMB > thresholdMB)
+        // Convert to JPEG using NetVips for efficient processing
+        using var image = Image.NewFromFile(inputFilePath);
+        string outputFilePath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(inputFilePath) + ".jpg");
+        SaveJpeg(image, outputFilePath);
+
+        // If it is still large, process further as JPEG
+        var currentSizeMB = GetFileSizeInMB(outputFilePath);
+        if (currentSizeMB > _jpegTargetSizeMB)
         {
-            // Convert to JPEG using NetVips for efficient processing
-            using var image = Image.NewFromFile(inputFilePath);
-            outputFilePath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(inputFilePath) + ".jpg");
-            image.Jpegsave(outputFilePath);
-        }
-        else
-        {
-            // Copy as-is to preserve original format
-            string fileName = Path.GetFileName(inputFilePath);
-            outputFilePath = Path.Combine(outputDirectory, fileName);
-            File.Copy(inputFilePath, outputFilePath, true);
+            File.Delete(outputFilePath);
+            await ProcessJpegImage(inputFilePath, outputDirectory);
         }
     }
+
+
 
     /// <summary>
     /// Processes a JPEG image by checking its size against the configured target.
@@ -82,42 +95,16 @@ public class ImageProcessor : IImageProcessor
     /// <returns>A task representing the asynchronous operation.</returns>
     public async Task ProcessJpegImage(string inputFilePath, string outputDirectory)
     {
-        if (string.IsNullOrWhiteSpace(inputFilePath))
-        {
-            throw new ArgumentException("Input file path cannot be null or empty.", nameof(inputFilePath));
-        }
-
-        if (string.IsNullOrWhiteSpace(outputDirectory))
-        {
-            throw new ArgumentException("Output directory cannot be null or empty.", nameof(outputDirectory));
-        }
+        ValidateFolders(inputFilePath, outputDirectory);
 
         // Ensure output directory exists
         Directory.CreateDirectory(outputDirectory);
 
-        // Get file size in MB
-        var fileInfo = new FileInfo(inputFilePath);
-        double sizeMB = fileInfo.Length / (1024.0 * 1024.0);
-
-        // Get configuration values with defaults
-        if (!double.TryParse(_configuration["JpegTargetSizeMB"], out double targetSizeMB))
-        {
-            targetSizeMB = 5.0; // Default target size
-        }
-
-        if (!double.TryParse(_configuration["ResizeStepPercentage"], out double resizeStepPercentage))
-        {
-            resizeStepPercentage = 3.0; // Default resize step
-        }
-
-        if (!int.TryParse(_configuration["MaxResizeIterations"], out int maxIterations))
-        {
-            maxIterations = 10; // Default max iterations
-        }
+        var originalSizeMB = GetFileSizeInMB(inputFilePath);
 
         string outputFilePath = Path.Combine(outputDirectory, Path.GetFileName(inputFilePath));
 
-        if (sizeMB <= targetSizeMB)
+        if (originalSizeMB <= _jpegTargetSizeMB)
         {
             // Copy as-is if already within target size
             File.Copy(inputFilePath, outputFilePath, true);
@@ -130,30 +117,37 @@ public class ImageProcessor : IImageProcessor
         // Iterative resizing loop
         // Design choice: Resize iteratively to avoid over-compression in one step, allowing gradual size reduction.
         // This approach balances quality and size, stopping when target is met or max iterations reached.
-        int iteration = 0;
-        double currentSizeMB = sizeMB;
+        int iteration = 1;
+        double currentSizeMB = originalSizeMB;
         Image currentImage = image;
 
-        while (currentSizeMB > targetSizeMB && iteration < maxIterations)
+        //List<FileState> attempedStates = new();
+        //var percent = 50;
+
+        while (currentSizeMB > _jpegTargetSizeMB && iteration < _maxResizeIterations)
         {
-            // Calculate scale factor (reduce dimensions by resizeStepPercentage)
-            double scaleFactor = 1.0 - (resizeStepPercentage / 100.0);
+            // Calculate scale factor (reduce dimensions by _resizeStepPercentage)
+            //double scaleFactor = 1.0 - (_resizeStepPercentage / 100.0);
+            var resizePercentage = _resizeStepPercentage * iteration;
+            double scaleFactor = 1.0 - (resizePercentage / 100.0);
+
+            //double scaleFactor = 1.0 - (percent / 100.0);
 
             // Resize the image
-            currentImage = currentImage.Resize(scaleFactor);
+            //currentImage = currentImage.Resize(scaleFactor);
+            currentImage = image.Resize(scaleFactor);
 
             // Save temporarily to check size (using a temp file to avoid overwriting output prematurely)
             string tempFilePath = Path.Combine(outputDirectory, Guid.NewGuid().ToString() + ".jpg");
             try
             {
-                currentImage.Jpegsave(tempFilePath);
+                SaveJpeg(currentImage, tempFilePath);
 
                 // Check the new size
-                var tempFileInfo = new FileInfo(tempFilePath);
-                currentSizeMB = tempFileInfo.Length / (1024.0 * 1024.0);
+                currentSizeMB = GetFileSizeInMB(tempFilePath);
 
                 // If size is now acceptable or we've reached max iterations, move to final output
-                if (currentSizeMB <= targetSizeMB || iteration == maxIterations - 1)
+                if (currentSizeMB <= _jpegTargetSizeMB || iteration == _maxResizeIterations - 1)
                 {
                     File.Move(tempFilePath, outputFilePath, true);
                     break;
@@ -182,5 +176,54 @@ public class ImageProcessor : IImageProcessor
         {
             File.Copy(inputFilePath, outputFilePath, true);
         }
+    }
+
+    public void CopyAsIs(string inputFilePath, string outputDirectory)
+    {
+        ValidateFolders(inputFilePath, outputDirectory);
+
+        var fileName = Path.GetFileName(inputFilePath);
+        string destFile = Path.Combine(outputDirectory, fileName);
+
+        File.Copy(inputFilePath, destFile, true);
+        AnsiConsole.MarkupLine($"[green]Copied {Markup.Escape(fileName)} as-is.[/]");
+    }
+
+    private static void ValidateFolders(string inputFilePath, string outputDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(inputFilePath))
+        {
+            throw new ArgumentException("Input file path cannot be null or empty.", nameof(inputFilePath));
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            throw new ArgumentException("Output directory cannot be null or empty.", nameof(outputDirectory));
+        }
+    }
+
+    private static double GetFileSizeInMB(string inputFilePath)
+    {
+        var fileInfo = new FileInfo(inputFilePath);
+        return fileInfo.Length / (1024.0 * 1024.0);
+    }
+
+    private static void SaveJpeg(Image image, string outputFilePath)
+    {
+        // Best-effort settings to minimize loss:
+        // - Q = 100 -> maximum quantizer quality
+        // - subsample_mode = disable chroma subsampling (keeps full chroma resolution)
+        // - optimizeCoding = true -> improved Huffman tables
+        // - trellisQuant = true, overshootDeringing = true -> improved visual quality
+        // - strip = true -> remove metadata (does not affect pixels, just reduces size)
+        // - subsampleMode -> disable chroma subsampling to keep color detail:
+        image.Jpegsave(
+                    outputFilePath,
+                    q: 100,
+                    optimizeCoding: true,
+                    trellisQuant: true,
+                    overshootDeringing: true,
+                    subsampleMode: Enums.ForeignSubsample.Off
+                );
     }
 }

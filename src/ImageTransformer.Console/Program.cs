@@ -29,41 +29,13 @@ AnsiConsole.MarkupLine("[green]ImageTransformer Console Application[/]");
 AnsiConsole.MarkupLine("[dim]Configuration loaded successfully.[/]");
 
 // Validate input folder
-var inputFolderPath = Path.Combine(Directory.GetCurrentDirectory(), configuration["InputFolder"] ?? "Input");
-
-if (!Directory.Exists(inputFolderPath))
+string inputFolderPath;
+if (IsInputFolderInvalid(configuration["InputFolder"], out inputFolderPath))
 {
-    AnsiConsole.MarkupLine($"[red]Input folder not found: {Markup.Escape(inputFolderPath)}[/]");
-    AnsiConsole.MarkupLine("[dim]Please ensure the input folder exists and try again.[/]");
-    return;
-}
-
-// Check if folder is accessible
-try
-{
-    // Attempt to enumerate files to verify read access
-    _ = Directory.EnumerateFileSystemEntries(inputFolderPath).FirstOrDefault();
-}
-catch (UnauthorizedAccessException)
-{
-    AnsiConsole.MarkupLine($"[red]Input folder is not accessible: {Markup.Escape(inputFolderPath)}[/]");
-    AnsiConsole.MarkupLine("[dim]Please check folder permissions and try again.[/]");
-    return;
-}
-catch (Exception ex)
-{
-    AnsiConsole.MarkupLine($"[red]Error accessing input folder: {Markup.Escape(ex.Message)}[/]");
     return;
 }
 
 AnsiConsole.WriteLine();
-
-// Prompt user to start processing
-if (!AnsiConsole.Confirm("Do you want to start processing images?"))
-{
-    AnsiConsole.MarkupLine("[yellow]Processing cancelled by user.[/]");
-    return;
-}
 
 // Scan for images
 AnsiConsole.MarkupLine($"[blue]Scanning input folder: {Markup.Escape(inputFolderPath)}[/]");
@@ -111,8 +83,7 @@ await AnsiConsole.Progress()
             AnsiConsole.MarkupLine($"[blue]Processing {Markup.Escape(Path.GetFileName(file))}...[/]");
             try
             {
-                string extension = Path.GetExtension(file).ToLowerInvariant();
-                switch (extension)
+                switch (Path.GetExtension(file).ToLowerInvariant())
                 {
                     case ".png":
                         await imageProcessor.ProcessPngImage(file, outputDirectory);
@@ -124,9 +95,7 @@ await AnsiConsole.Progress()
                         AnsiConsole.MarkupLine($"[green]Processed JPEG {Markup.Escape(Path.GetFileName(file))}.[/]");
                         break;
                     default:
-                        string destFile = Path.Combine(outputDirectory, Path.GetFileName(file));
-                        File.Copy(file, destFile, true);
-                        AnsiConsole.MarkupLine($"[green]Copied {Markup.Escape(Path.GetFileName(file))} as-is.[/]");
+                        imageProcessor.CopyAsIs(file, outputDirectory);
                         break;
                 }
             }
@@ -139,3 +108,34 @@ await AnsiConsole.Progress()
     });
 
 AnsiConsole.MarkupLine("[green]Processing completed![/]");
+
+static bool IsInputFolderInvalid(string? inputFolder, out string inputFolderPath)
+{
+    inputFolderPath = Path.Combine(Directory.GetCurrentDirectory(), inputFolder ?? "Input");
+    if (!Directory.Exists(inputFolderPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Input folder not found: {Markup.Escape(inputFolderPath)}[/]");
+        AnsiConsole.MarkupLine("[dim]Please ensure the input folder exists and try again.[/]");
+        return true;
+    }
+
+    // Check if folder is accessible
+    try
+    {
+        // Attempt to enumerate files to verify read access
+        _ = Directory.EnumerateFileSystemEntries(inputFolderPath).FirstOrDefault();
+    }
+    catch (UnauthorizedAccessException)
+    {
+        AnsiConsole.MarkupLine($"[red]Input folder is not accessible: {Markup.Escape(inputFolderPath)}[/]");
+        AnsiConsole.MarkupLine("[dim]Please check folder permissions and try again.[/]");
+        return true;
+    }
+    catch (Exception ex)
+    {
+        AnsiConsole.MarkupLine($"[red]Error accessing input folder: {Markup.Escape(ex.Message)}[/]");
+        return true;
+    }
+
+    return false;
+}

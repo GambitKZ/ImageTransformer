@@ -1,4 +1,4 @@
-using ImageTransformer.Console.Interfaces;
+﻿using ImageTransformer.Console.Interfaces;
 
 /// <summary>
 /// Implementation of IImageScanner that discovers image files in a specified folder.
@@ -25,7 +25,7 @@ public class ImageScanner : IImageScanner
             // Use Directory.EnumerateFiles for efficient enumeration
             var imageFiles = Directory.EnumerateFiles(inputPath)
                 .Where(file => Path.GetExtension(file).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg")
-                .OrderBy(file => file); // Ensure consistent ordering
+                .Order();
 
             // Convert to list to materialize the results
             return await Task.FromResult(imageFiles.ToList());
