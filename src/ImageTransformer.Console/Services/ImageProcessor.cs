@@ -1,4 +1,5 @@
 ﻿using ImageTransformer.Console.Interfaces;
+using ImageTransformer.Console.Models;
 using Microsoft.Extensions.Configuration;
 using NetVips;
 using Spectre.Console;
@@ -114,24 +115,22 @@ public class ImageProcessor : IImageProcessor
         // Load the image using NetVips
         using var image = Image.NewFromFile(inputFilePath);
 
-        // Iterative resizing loop
-        // Design choice: Resize iteratively to avoid over-compression in one step, allowing gradual size reduction.
-        // This approach balances quality and size, stopping when target is met or max iterations reached.
-        int iteration = 1;
+        int iteration = 0;
         double currentSizeMB = originalSizeMB;
         Image currentImage = image;
 
-        //List<FileState> attempedStates = new();
-        //var percent = 50;
+        List<FileState> attempedStates = new();
+        //List<FileState> successStates = new();
+        double leftRange = 0;
+        double rightRange = 100;
 
-        while (currentSizeMB > _jpegTargetSizeMB && iteration < _maxResizeIterations)
+        // Alway takes 6 steps
+        while ((rightRange - leftRange) >= _resizeStepPercentage)
         {
-            // Calculate scale factor (reduce dimensions by _resizeStepPercentage)
-            //double scaleFactor = 1.0 - (_resizeStepPercentage / 100.0);
-            var resizePercentage = _resizeStepPercentage * iteration;
-            double scaleFactor = 1.0 - (resizePercentage / 100.0);
+            iteration++;
 
-            //double scaleFactor = 1.0 - (percent / 100.0);
+            double percent = (leftRange + rightRange) / 2.0;
+            double scaleFactor = 1.0 - (percent / 100.0);
 
             // Resize the image
             //currentImage = currentImage.Resize(scaleFactor);
@@ -146,16 +145,27 @@ public class ImageProcessor : IImageProcessor
                 // Check the new size
                 currentSizeMB = GetFileSizeInMB(tempFilePath);
 
-                // If size is now acceptable or we've reached max iterations, move to final output
-                if (currentSizeMB <= _jpegTargetSizeMB || iteration == _maxResizeIterations - 1)
+                var isFit = currentSizeMB <= _jpegTargetSizeMB;
+
+                var currentFileState = new FileState
                 {
-                    File.Move(tempFilePath, outputFilePath, true);
-                    break;
+                    Percent = percent,
+                    IsFit = isFit,
+                    FilePath = tempFilePath
+                };
+
+                attempedStates.Add(currentFileState);
+
+                if (isFit)
+                {
+                    // Change Right range
+                    //successStates.Add(currentFileState);
+                    rightRange = percent;
                 }
                 else
                 {
-                    // Clean up temp file and continue
-                    File.Delete(tempFilePath);
+                    // Change Right range
+                    leftRange = percent;
                 }
             }
             catch (Exception ex)
@@ -168,14 +178,36 @@ public class ImageProcessor : IImageProcessor
                 throw new InvalidOperationException("Error during JPEG resizing operation.", ex);
             }
 
-            iteration++;
         }
 
-        // If loop exited without saving, copy original (shouldn't happen, but safety net)
-        if (!File.Exists(outputFilePath))
+        var bestState = //successStates.OrderBy(s => s.Percent).First();
+            attempedStates.Where(x => x.IsFit).OrderBy(s => s.Percent).First();
+
+        File.Move(bestState.FilePath, outputFilePath, true);
+
+        // Clean up other temporary files created during attempts
+        foreach (var state in attempedStates)
         {
-            File.Copy(inputFilePath, outputFilePath, true);
+            if (state.FilePath is null)
+            {
+                continue;
+            }
+
+            if (!string.Equals(state.FilePath, bestState.FilePath, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(state.FilePath))
+            {
+                try
+                {
+                    File.Delete(state.FilePath);
+                }
+                catch
+                {
+                    // Best-effort cleanup; ignore failures to delete temp files
+                }
+            }
         }
+
+        AnsiConsole.MarkupLine($"[green]Saved resized image at {Markup.Escape(outputFilePath)} (percent={bestState.Percent:F2}). Attempt number #{iteration} [/].");
     }
 
     public void CopyAsIs(string inputFilePath, string outputDirectory)

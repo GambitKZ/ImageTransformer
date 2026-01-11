@@ -2,6 +2,7 @@
 
 internal record FileState
 {
-    int Percent { get; init; }
-    bool IsFit { get; init; }
+    public double Percent { get; init; }
+    public bool IsFit { get; init; }
+    public string FilePath { get; init; }
 }
