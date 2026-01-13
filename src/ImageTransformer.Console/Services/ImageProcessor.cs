@@ -1,5 +1,4 @@
 ﻿using ImageTransformer.Console.Interfaces;
-using ImageTransformer.Console.Models;
 using Microsoft.Extensions.Configuration;
 using NetVips;
 using Spectre.Console;
@@ -17,7 +16,6 @@ public class ImageProcessor : IImageProcessor
     private double _pngSizeThresholdMB;
     private double _jpegTargetSizeMB;
     private double _resizeStepPercentage;
-    private int _maxResizeIterations;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ImageProcessor"/> class.
@@ -40,11 +38,6 @@ public class ImageProcessor : IImageProcessor
         if (!double.TryParse(_configuration["ResizeStepPercentage"], out _resizeStepPercentage))
         {
             _resizeStepPercentage = 3.0; // Default resize step
-        }
-
-        if (!int.TryParse(_configuration["MaxResizeIterations"], out _maxResizeIterations))
-        {
-            _maxResizeIterations = 10; // Default max iterations
         }
     }
 
@@ -74,15 +67,19 @@ public class ImageProcessor : IImageProcessor
         // Convert to JPEG using NetVips for efficient processing
         using var image = Image.NewFromFile(inputFilePath);
         string outputFilePath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(inputFilePath) + ".jpg");
-        SaveJpeg(image, outputFilePath);
+
+        var jpegBytes = SaveJpegToMemory(image);
+        var currentSizeMB = jpegBytes.Length / (1024.0 * 1024.0);
+
+        // if size is correct, save and return
+        if (currentSizeMB < _jpegTargetSizeMB)
+        {
+            File.WriteAllBytes(outputFilePath, jpegBytes);
+            return;
+        }
 
         // If it is still large, process further as JPEG
-        var currentSizeMB = GetFileSizeInMB(outputFilePath);
-        if (currentSizeMB > _jpegTargetSizeMB)
-        {
-            File.Delete(outputFilePath);
-            await ProcessJpegImage(inputFilePath, outputDirectory);
-        }
+        await ProcessJpegImage(inputFilePath, outputDirectory);
     }
 
 
@@ -103,7 +100,7 @@ public class ImageProcessor : IImageProcessor
 
         var originalSizeMB = GetFileSizeInMB(inputFilePath);
 
-        string outputFilePath = Path.Combine(outputDirectory, Path.GetFileName(inputFilePath));
+        string outputFilePath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(inputFilePath) + ".jpg");
 
         if (originalSizeMB <= _jpegTargetSizeMB)
         {
@@ -115,12 +112,12 @@ public class ImageProcessor : IImageProcessor
         // Load the image using NetVips
         using var image = Image.NewFromFile(inputFilePath);
 
+        byte[] bestFileBytes = [];
+        double bestPercent = 0.0;
+
         int iteration = 0;
-        double currentSizeMB = originalSizeMB;
         Image currentImage = image;
 
-        List<FileState> attempedStates = new();
-        //List<FileState> successStates = new();
         double leftRange = 0;
         double rightRange = 100;
 
@@ -133,81 +130,31 @@ public class ImageProcessor : IImageProcessor
             double scaleFactor = 1.0 - (percent / 100.0);
 
             // Resize the image
-            //currentImage = currentImage.Resize(scaleFactor);
             currentImage = image.Resize(scaleFactor);
 
-            // Save temporarily to check size (using a temp file to avoid overwriting output prematurely)
-            string tempFilePath = Path.Combine(outputDirectory, Guid.NewGuid().ToString() + ".jpg");
-            try
+            var jpegBytes = SaveJpegToMemory(currentImage);
+            var currentSizeMB = jpegBytes.Length / (1024.0 * 1024.0);
+
+            var isFit = currentSizeMB <= _jpegTargetSizeMB;
+
+            if (isFit)
             {
-                SaveJpeg(currentImage, tempFilePath);
+                bestPercent = percent;
+                bestFileBytes = jpegBytes;
 
-                // Check the new size
-                currentSizeMB = GetFileSizeInMB(tempFilePath);
-
-                var isFit = currentSizeMB <= _jpegTargetSizeMB;
-
-                var currentFileState = new FileState
-                {
-                    Percent = percent,
-                    IsFit = isFit,
-                    FilePath = tempFilePath
-                };
-
-                attempedStates.Add(currentFileState);
-
-                if (isFit)
-                {
-                    // Change Right range
-                    //successStates.Add(currentFileState);
-                    rightRange = percent;
-                }
-                else
-                {
-                    // Change Right range
-                    leftRange = percent;
-                }
+                // Change Right range
+                rightRange = percent;
             }
-            catch (Exception ex)
+            else
             {
-                // Clean up temp file on error
-                if (File.Exists(tempFilePath))
-                {
-                    File.Delete(tempFilePath);
-                }
-                throw new InvalidOperationException("Error during JPEG resizing operation.", ex);
-            }
-
-        }
-
-        var bestState = //successStates.OrderBy(s => s.Percent).First();
-            attempedStates.Where(x => x.IsFit).OrderBy(s => s.Percent).First();
-
-        File.Move(bestState.FilePath, outputFilePath, true);
-
-        // Clean up other temporary files created during attempts
-        foreach (var state in attempedStates)
-        {
-            if (state.FilePath is null)
-            {
-                continue;
-            }
-
-            if (!string.Equals(state.FilePath, bestState.FilePath, StringComparison.OrdinalIgnoreCase)
-                && File.Exists(state.FilePath))
-            {
-                try
-                {
-                    File.Delete(state.FilePath);
-                }
-                catch
-                {
-                    // Best-effort cleanup; ignore failures to delete temp files
-                }
+                // Change Left range
+                leftRange = percent;
             }
         }
 
-        AnsiConsole.MarkupLine($"[green]Saved resized image at {Markup.Escape(outputFilePath)} (percent={bestState.Percent:F2}). Attempt number #{iteration} [/].");
+        File.WriteAllBytes(outputFilePath, bestFileBytes);
+
+        AnsiConsole.MarkupLine($"[green]Saved resized image at {Markup.Escape(outputFilePath)} (percent={bestPercent:F2}). Attempt number #{iteration} [/].");
     }
 
     public void CopyAsIs(string inputFilePath, string outputDirectory)
@@ -240,7 +187,7 @@ public class ImageProcessor : IImageProcessor
         return fileInfo.Length / (1024.0 * 1024.0);
     }
 
-    private static void SaveJpeg(Image image, string outputFilePath)
+    private static byte[] SaveJpegToMemory(Image image)
     {
         // Best-effort settings to minimize loss:
         // - Q = 100 -> maximum quantizer quality
@@ -249,13 +196,12 @@ public class ImageProcessor : IImageProcessor
         // - trellisQuant = true, overshootDeringing = true -> improved visual quality
         // - strip = true -> remove metadata (does not affect pixels, just reduces size)
         // - subsampleMode -> disable chroma subsampling to keep color detail:
-        image.Jpegsave(
-                    outputFilePath,
-                    q: 100,
-                    optimizeCoding: true,
-                    trellisQuant: true,
-                    overshootDeringing: true,
-                    subsampleMode: Enums.ForeignSubsample.Off
-                );
+        return image.JpegsaveBuffer(
+            q: 100,
+            optimizeCoding: true,
+            trellisQuant: true,
+            overshootDeringing: true,
+            subsampleMode: Enums.ForeignSubsample.Off
+        );
     }
 }
